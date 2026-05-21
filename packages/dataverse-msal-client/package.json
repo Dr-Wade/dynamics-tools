@@ -1,6 +1,6 @@
 {
   "name": "dataverse-msal-client",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Authenticated DynamicsWebApi client factory (MSAL client credentials) and @odata.bind helpers for Microsoft Dataverse / Dynamics 365.",
   "type": "module",
   "repository": {
