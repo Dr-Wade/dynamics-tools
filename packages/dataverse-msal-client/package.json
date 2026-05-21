@@ -1,8 +1,16 @@
 {
   "name": "dataverse-msal-client",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Authenticated DynamicsWebApi client factory (MSAL client credentials) and @odata.bind helpers for Microsoft Dataverse / Dynamics 365.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dr-Wade/dynamics-tools.git",
+    "directory": "packages/dataverse-msal-client"
+  },
+  "homepage": "https://github.com/Dr-Wade/dynamics-tools/tree/main/packages/dataverse-msal-client#readme",
+  "bugs": "https://github.com/Dr-Wade/dynamics-tools/issues",
+  "author": "Edward Tombre",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
