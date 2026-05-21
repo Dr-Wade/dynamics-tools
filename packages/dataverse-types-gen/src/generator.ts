@@ -196,6 +196,30 @@ const renderOptionSets = (
     return lines.join("\n");
 };
 
+const renderEntityNames = (
+    entities: { logicalName: string; setName: string }[],
+    regenCommand: string
+): string => {
+    const lines: string[] = [...HEADER(regenCommand)];
+    const sorted = [...entities].sort((a, b) => a.logicalName.localeCompare(b.logicalName));
+
+    lines.push("/** Entity logical names — for metadata and single-record API paths. */");
+    lines.push("export const EntityLogicalNames = {");
+    for (const e of sorted) {
+        lines.push(`    ${tsTypeName(e.logicalName)}: ${JSON.stringify(e.logicalName)},`);
+    }
+    lines.push("} as const;");
+    lines.push("");
+    lines.push("/** Entity set (collection) names — what the Web API and @odata.bind URLs use. */");
+    lines.push("export const EntitySetNames = {");
+    for (const e of sorted) {
+        lines.push(`    ${tsTypeName(e.logicalName)}: ${JSON.stringify(e.setName)},`);
+    }
+    lines.push("} as const;");
+    lines.push("");
+    return lines.join("\n");
+};
+
 const edmToTs = (edmType: string, nullable: boolean): string => {
     const collection = edmType.startsWith("Collection(") && edmType.endsWith(")");
     const inner = collection ? edmType.slice(11, -1) : edmType;
@@ -403,6 +427,12 @@ export const generate = async ({
         return full;
     };
 
+    // Map entity type name -> entity set (collection) name from the EntityContainer.
+    const setNameByEntity = new Map<string, string>();
+    for (const set of arr(crmSchema.EntityContainer?.EntitySet)) {
+        setNameByEntity.set(stripNs(set["@_EntityType"]), set["@_Name"]);
+    }
+
     const flattenInherited = (e: EdmEntityType): EdmEntityType => {
         if (!e["@_BaseType"]) return e;
         const base = byName.get(stripNs(e["@_BaseType"]));
@@ -450,6 +480,17 @@ export const generate = async ({
     fs.writeFileSync(optionSetsFile, optionSetsCode);
     log(`Wrote ${path.relative(process.cwd(), optionSetsFile)}`);
 
+    const entityNamesCode = renderEntityNames(
+        config.entities.map((logicalName) => ({
+            logicalName,
+            setName: setNameByEntity.get(logicalName) ?? logicalName
+        })),
+        regenCommand
+    );
+    const entityNamesFile = path.join(outDir, "entity-names.ts");
+    fs.writeFileSync(entityNamesFile, entityNamesCode);
+    log(`Wrote ${path.relative(process.cwd(), entityNamesFile)}`);
+
     const indexLines: string[] = [...HEADER(regenCommand)];
 
     for (const logicalName of config.entities) {
@@ -463,6 +504,7 @@ export const generate = async ({
     }
 
     indexLines.push(`export * from "./optionsets";`);
+    indexLines.push(`export * from "./entity-names";`);
     const indexFile = path.join(outDir, "index.ts");
     fs.writeFileSync(indexFile, indexLines.join("\n") + "\n");
     log(`Wrote ${path.relative(process.cwd(), indexFile)}`);

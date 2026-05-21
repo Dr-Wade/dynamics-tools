@@ -6,6 +6,7 @@ For each requested entity the CLI writes:
 
 - An `<entity>.ts` file with an `interface` for the entity, an `<Entity>Bind` interface for `@odata.bind` writes, and imports for related entities
 - A shared `optionsets.ts` file with `enum`s for every picklist/state/status/multiselect option set discovered across the requested entities
+- A shared `entity-names.ts` file with `EntityLogicalNames` and `EntitySetNames` `as const` objects for the requested entities
 - An `index.ts` barrel re-exporting all generated types
 
 ## Installation
@@ -68,7 +69,19 @@ For `entities: ["account"]` you get:
 src/dataverse-gen/
   account.ts       # export interface Account, export interface AccountBind
   optionsets.ts    # export enum AccountStatecode, ...
+  entity-names.ts  # export const EntityLogicalNames, EntitySetNames
   index.ts         # re-exports
+```
+
+`entity-names.ts` gives you the correct strings to pass to a Web API client —
+`EntitySetNames` is the plural collection name (`accounts`) used in request
+URLs and `@odata.bind`, `EntityLogicalNames` is the singular name (`account`)
+used for metadata paths:
+
+```ts
+import { EntitySetNames } from "./dataverse-gen";
+
+await webApi.retrieveMultiple(EntitySetNames.Account);
 ```
 
 ## How it works
@@ -76,7 +89,7 @@ src/dataverse-gen/
 1. Acquires a bearer token via MSAL using client credentials.
 2. Fetches the OData `$metadata` document and parses the EDM schema.
 3. For each requested entity, fetches `EntityDefinitions(...)/Attributes/Microsoft.Dynamics.CRM.<PicklistSubtype>` to enumerate option sets.
-4. Renders one `.ts` file per entity plus a shared `optionsets.ts`.
+4. Renders one `.ts` file per entity, a shared `optionsets.ts`, and an `entity-names.ts` (entity set names are read from the `EntityContainer` in `$metadata`).
 
 Inherited properties are flattened from `@BaseType` chains. Navigation properties to entities in your requested set are typed; those outside the set fall back to `unknown` (use `$expand` carefully).
 
