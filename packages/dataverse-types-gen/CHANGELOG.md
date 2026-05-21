@@ -1,5 +1,11 @@
 # dataverse-types-gen
 
+## 0.1.1
+
+### Patch Changes
+
+- [`411e65e`](https://github.com/Dr-Wade/dynamics-tools/commit/411e65ecaad75d37273a1c70c4e5ec2a4d6c9731) Thanks [@Dr-Wade](https://github.com/Dr-Wade)! - Added TENANT_ID env variable support
+
 ## 0.1.0
 
 ### Minor Changes
