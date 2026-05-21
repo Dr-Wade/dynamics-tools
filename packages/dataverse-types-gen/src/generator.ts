@@ -58,7 +58,7 @@ const acquireToken = async (): Promise<string> => {
         }
     });
     const result = await cca.acquireTokenByClientCredential({
-        authority: requireEnv("AUTHORITY_URL"),
+        authority: `https://login.microsoftonline.com/${requireEnv("TENANT_ID")}`,
         scopes: [`${requireEnv("SERVER_URL")}/.default`]
     });
     if (!result?.accessToken) {

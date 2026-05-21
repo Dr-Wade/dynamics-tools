@@ -20,7 +20,7 @@ Config JSON shape:
 
 Environment variables (loaded from .env if present):
   SERVER_URL              Dataverse environment URL (e.g. https://org.crm.dynamics.com)
-  AUTHORITY_URL           OAuth authority (e.g. https://login.microsoftonline.com/<tenant-id>)
+  TENANT_ID               Microsoft Entra tenant ID
   DYNAMICS_CLIENT_ID      Azure AD app client ID
   DYNAMICS_CLIENT_SECRET  Azure AD app client secret
 `);

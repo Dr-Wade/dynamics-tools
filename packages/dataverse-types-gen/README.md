@@ -36,7 +36,7 @@ The generator authenticates with Microsoft Entra ID using the client-credentials
 | Variable                 | Description                                                              |
 | ------------------------ | ------------------------------------------------------------------------ |
 | `SERVER_URL`             | Dataverse environment URL, e.g. `https://contoso.crm.dynamics.com`       |
-| `AUTHORITY_URL`          | OAuth authority, e.g. `https://login.microsoftonline.com/<tenant-id>`    |
+| `TENANT_ID`              | Microsoft Entra tenant ID                                                |
 | `DYNAMICS_CLIENT_ID`     | Azure AD application (client) ID                                         |
 | `DYNAMICS_CLIENT_SECRET` | Azure AD application client secret                                       |
 
