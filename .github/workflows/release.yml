@@ -24,6 +24,10 @@ jobs:
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
 
+      # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 20 ships an older npm.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -31,10 +35,10 @@ jobs:
         uses: changesets/action@v1
         with:
           # Builds every package, then runs `changeset publish`.
+          # No NPM_TOKEN: auth is via OIDC trusted publishing (configured on npmjs.com).
           publish: pnpm release
           version: pnpm version-packages
           commit: "chore: version packages"
           title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
