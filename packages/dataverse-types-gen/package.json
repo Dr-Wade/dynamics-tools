@@ -1,0 +1,43 @@
+{
+  "name": "dataverse-types-gen",
+  "version": "0.1.0",
+  "description": "Generate TypeScript types and optionset enums from a Microsoft Dataverse / Dynamics 365 environment's $metadata.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "dataverse-types-gen": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "dataverse",
+    "dynamics",
+    "dynamics-365",
+    "d365",
+    "types",
+    "typescript",
+    "codegen",
+    "metadata"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^3.6.2",
+    "dotenv": "^17.2.1",
+    "fast-xml-parser": "^5.7.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.10",
+    "typescript": "^5.8.3"
+  }
+}

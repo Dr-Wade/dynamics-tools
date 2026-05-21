@@ -1,0 +1,38 @@
+{
+  "name": "dataverse-msal-client",
+  "version": "0.1.0",
+  "description": "Authenticated DynamicsWebApi client factory (MSAL client credentials) and @odata.bind helpers for Microsoft Dataverse / Dynamics 365.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "dataverse",
+    "dynamics",
+    "dynamics-365",
+    "d365",
+    "msal",
+    "client-credentials",
+    "odata"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "@azure/msal-node": "^3.0.0",
+    "dynamics-web-api": "^2.3.0"
+  },
+  "devDependencies": {
+    "@azure/msal-node": "^3.6.2",
+    "dynamics-web-api": "^2.3.1"
+  }
+}

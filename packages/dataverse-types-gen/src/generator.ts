@@ -1,0 +1,469 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as MSAL from "@azure/msal-node";
+import { XMLParser } from "fast-xml-parser";
+
+export interface GenConfig {
+    entities: string[];
+    outputDir: string;
+}
+
+interface EdmProperty {
+    "@_Name": string;
+    "@_Type": string;
+    "@_Nullable"?: string;
+}
+
+interface EdmNavigationProperty {
+    "@_Name": string;
+    "@_Type": string;
+    "@_Partner"?: string;
+    "@_Nullable"?: string;
+}
+
+interface EdmEntityType {
+    "@_Name": string;
+    "@_BaseType"?: string;
+    Key?: { PropertyRef: { "@_Name": string } | { "@_Name": string }[] };
+    Property?: EdmProperty | EdmProperty[];
+    NavigationProperty?: EdmNavigationProperty | EdmNavigationProperty[];
+}
+
+interface EdmSchema {
+    "@_Namespace": string;
+    "@_Alias"?: string;
+    EntityType?: EdmEntityType | EdmEntityType[];
+    EntityContainer?: {
+        EntitySet?:
+            | { "@_Name": string; "@_EntityType": string }
+            | { "@_Name": string; "@_EntityType": string }[];
+    };
+}
+
+const arr = <T>(v: T | T[] | undefined): T[] =>
+    v === undefined ? [] : Array.isArray(v) ? v : [v];
+
+const requireEnv = (name: string): string => {
+    const v = process.env[name];
+    if (!v) throw new Error(`Missing required environment variable: ${name}`);
+    return v;
+};
+
+const acquireToken = async (): Promise<string> => {
+    const cca = new MSAL.ConfidentialClientApplication({
+        auth: {
+            clientId: requireEnv("DYNAMICS_CLIENT_ID"),
+            clientSecret: requireEnv("DYNAMICS_CLIENT_SECRET"),
+            knownAuthorities: ["login.microsoftonline.com"]
+        }
+    });
+    const result = await cca.acquireTokenByClientCredential({
+        authority: requireEnv("AUTHORITY_URL"),
+        scopes: [`${requireEnv("SERVER_URL")}/.default`]
+    });
+    if (!result?.accessToken) {
+        throw new Error("Failed to acquire access token");
+    }
+    return result.accessToken;
+};
+
+const fetchMetadata = async (token: string): Promise<string> => {
+    const url = `${requireEnv("SERVER_URL")}/api/data/v9.2/$metadata`;
+    const res = await fetch(url, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/xml"
+        }
+    });
+    if (!res.ok) {
+        throw new Error(`Failed to fetch $metadata: ${res.status} ${res.statusText}`);
+    }
+    return res.text();
+};
+
+interface RawLabel {
+    LocalizedLabels?: { Label: string; LanguageCode: number }[];
+    UserLocalizedLabel?: { Label: string; LanguageCode: number } | null;
+}
+
+interface RawOptionMeta {
+    Value: number;
+    Label: RawLabel;
+}
+
+interface RawOptionSet {
+    Name: string;
+    IsGlobal: boolean;
+    Options: RawOptionMeta[];
+}
+
+interface RawAttribute {
+    LogicalName: string;
+    OptionSet: RawOptionSet;
+}
+
+const PICKLIST_SUBTYPES = [
+    "PicklistAttributeMetadata",
+    "StatusAttributeMetadata",
+    "StateAttributeMetadata",
+    "MultiSelectPicklistAttributeMetadata"
+] as const;
+
+const fetchPicklistsForEntity = async (
+    token: string,
+    entityLogicalName: string
+): Promise<RawAttribute[]> => {
+    const base = `${requireEnv("SERVER_URL")}/api/data/v9.2`;
+    const headers = {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        "OData-Version": "4.0",
+        "OData-MaxVersion": "4.0"
+    };
+    const all: RawAttribute[] = [];
+    for (const subtype of PICKLIST_SUBTYPES) {
+        const url =
+            `${base}/EntityDefinitions(LogicalName='${entityLogicalName}')` +
+            `/Attributes/Microsoft.Dynamics.CRM.${subtype}` +
+            `?$select=LogicalName&$expand=OptionSet($select=Name,IsGlobal,Options)`;
+        const res = await fetch(url, { headers });
+        if (!res.ok) {
+            throw new Error(
+                `Failed to fetch ${subtype} for ${entityLogicalName}: ${res.status} ${res.statusText}`
+            );
+        }
+        const body = (await res.json()) as { value: RawAttribute[] };
+        all.push(...body.value.filter((a) => a.OptionSet));
+    }
+    return all;
+};
+
+const englishLabel = (label: RawLabel): string | null => {
+    const en = label.LocalizedLabels?.find((l) => l.LanguageCode === 1033);
+    if (en) return en.Label;
+    if (label.UserLocalizedLabel) return label.UserLocalizedLabel.Label;
+    return null;
+};
+
+const sanitiseEnumMember = (raw: string, value: number): string => {
+    let s = raw
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^A-Za-z0-9_]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    if (s.length === 0) s = `Option_${value}`;
+    if (/^[0-9]/.test(s)) s = `_${s}`;
+    return s;
+};
+
+const enumTypeName = (optionSetName: string): string =>
+    optionSetName
+        .split(/[_\s]+/)
+        .filter(Boolean)
+        .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+        .join("");
+
+const HEADER = (cmd: string) => [
+    `// AUTO-GENERATED by dataverse-types-gen. Do not edit by hand.`,
+    `// Regenerate with: ${cmd}`,
+    ""
+];
+
+const renderOptionSets = (
+    optionSets: Map<string, RawOptionSet>,
+    regenCommand: string
+): string => {
+    const lines: string[] = [...HEADER(regenCommand)];
+
+    for (const [, os] of [...optionSets.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+        const tname = enumTypeName(os.Name);
+        lines.push(`export enum ${tname} {`);
+        const seenMembers = new Set<string>();
+        for (const opt of os.Options) {
+            const label = englishLabel(opt.Label);
+            const baseMember = label ? sanitiseEnumMember(label, opt.Value) : `Option_${opt.Value}`;
+            let member = baseMember;
+            let i = 2;
+            while (seenMembers.has(member)) {
+                member = `${baseMember}_${i++}`;
+            }
+            seenMembers.add(member);
+            lines.push(`    ${member} = ${opt.Value},`);
+        }
+        lines.push("}");
+        lines.push("");
+    }
+    return lines.join("\n");
+};
+
+const edmToTs = (edmType: string, nullable: boolean): string => {
+    const collection = edmType.startsWith("Collection(") && edmType.endsWith(")");
+    const inner = collection ? edmType.slice(11, -1) : edmType;
+    let ts: string;
+    switch (inner) {
+        case "Edm.String":
+        case "Edm.Guid":
+        case "Edm.DateTimeOffset":
+        case "Edm.Date":
+        case "Edm.Binary":
+            ts = "string";
+            break;
+        case "Edm.Int32":
+        case "Edm.Int64":
+        case "Edm.Decimal":
+        case "Edm.Double":
+        case "Edm.Single":
+            ts = "number";
+            break;
+        case "Edm.Boolean":
+            ts = "boolean";
+            break;
+        default:
+            ts = "unknown";
+    }
+    if (collection) ts = `${ts}[]`;
+    return nullable ? `${ts} | null` : ts;
+};
+
+const isPropName = (s: string): boolean => /^[A-Za-z_][\w]*$/.test(s);
+const quoteKey = (s: string): string => (isPropName(s) ? s : JSON.stringify(s));
+
+const navTargetEntityName = (
+    fullType: string,
+    prefixes: string[]
+): { logicalName: string; collection: boolean } => {
+    const collection = fullType.startsWith("Collection(") && fullType.endsWith(")");
+    const inner = collection ? fullType.slice(11, -1) : fullType;
+    let logicalName = inner;
+    for (const ns of prefixes) {
+        const p = `${ns}.`;
+        if (inner.startsWith(p)) {
+            logicalName = inner.slice(p.length);
+            break;
+        }
+    }
+    return { logicalName, collection };
+};
+
+const tsTypeName = (logicalName: string): string =>
+    logicalName.charAt(0).toUpperCase() + logicalName.slice(1);
+
+const renderEntity = (
+    entity: EdmEntityType,
+    nsPrefixes: string[],
+    requestedSet: Set<string>,
+    attrEnums: Map<string, string>,
+    regenCommand: string
+): { code: string; imports: Set<string>; enumImports: Set<string> } => {
+    const name = entity["@_Name"];
+    const typeName = tsTypeName(name);
+    const props = arr(entity.Property);
+    const navs = arr(entity.NavigationProperty);
+    const imports = new Set<string>();
+    const enumImports = new Set<string>();
+
+    const lines: string[] = [...HEADER(regenCommand)];
+
+    const navTargets = navs.map((n) => navTargetEntityName(n["@_Type"], nsPrefixes));
+    for (const t of navTargets) {
+        if (requestedSet.has(t.logicalName) && t.logicalName !== name) {
+            imports.add(t.logicalName);
+        }
+    }
+
+    for (const p of props) {
+        const enumType = attrEnums.get(p["@_Name"]);
+        if (enumType && p["@_Type"] === "Edm.Int32") enumImports.add(enumType);
+    }
+
+    const importLines = [...imports]
+        .sort()
+        .map((n) => `import type { ${tsTypeName(n)} } from "./${n}";`);
+    if (importLines.length > 0) {
+        lines.push(...importLines, "");
+    }
+    if (enumImports.size > 0) {
+        lines.push(
+            `import type { ${[...enumImports].sort().join(", ")} } from "./optionsets";`,
+            ""
+        );
+    }
+
+    lines.push(`export interface ${typeName} {`);
+    for (const p of props) {
+        const pname = p["@_Name"];
+        const nullable = p["@_Nullable"] !== "false";
+        const enumType = attrEnums.get(pname);
+        const useEnum = enumType && p["@_Type"] === "Edm.Int32";
+        const ts = useEnum
+            ? nullable
+                ? `${enumType} | null`
+                : enumType!
+            : edmToTs(p["@_Type"], nullable);
+        lines.push(`    ${quoteKey(pname)}?: ${ts};`);
+    }
+
+    if (navs.length > 0) {
+        lines.push("");
+        lines.push("    // Navigation properties (use $expand to populate)");
+        for (const n of navs) {
+            const nname = n["@_Name"];
+            const target = navTargetEntityName(n["@_Type"], nsPrefixes);
+            const targetTs = requestedSet.has(target.logicalName)
+                ? tsTypeName(target.logicalName)
+                : "unknown";
+            const ts = target.collection ? `${targetTs}[]` : targetTs;
+            lines.push(`    ${quoteKey(nname)}?: ${ts};`);
+        }
+    }
+
+    lines.push("}");
+    lines.push("");
+
+    const singleValueLookups = navs.filter(
+        (n) => !navTargetEntityName(n["@_Type"], nsPrefixes).collection
+    );
+    if (singleValueLookups.length > 0) {
+        lines.push(`export interface ${typeName}Bind {`);
+        for (const n of singleValueLookups) {
+            const target = navTargetEntityName(n["@_Type"], nsPrefixes);
+            const bindKey = `${n["@_Name"]}@odata.bind`;
+            lines.push(
+                `    ${quoteKey(bindKey)}?: string; // /<entityset>(<id>) referencing ${target.logicalName}`
+            );
+        }
+        lines.push("}");
+        lines.push("");
+    }
+
+    return { code: lines.join("\n"), imports, enumImports };
+};
+
+export const loadConfig = (configPath: string): GenConfig => {
+    const resolved = path.resolve(configPath);
+    if (!fs.existsSync(resolved)) {
+        throw new Error(`Config file not found: ${resolved}`);
+    }
+    const cfg = JSON.parse(fs.readFileSync(resolved, "utf8")) as Partial<GenConfig>;
+    if (!Array.isArray(cfg.entities) || cfg.entities.length === 0) {
+        throw new Error(`Config '${resolved}' must contain a non-empty 'entities' array`);
+    }
+    if (typeof cfg.outputDir !== "string" || !cfg.outputDir) {
+        throw new Error(`Config '${resolved}' must contain a non-empty 'outputDir' string`);
+    }
+    return { entities: cfg.entities, outputDir: cfg.outputDir };
+};
+
+export interface RunOptions {
+    config: GenConfig;
+    regenCommand?: string;
+    log?: (msg: string) => void;
+}
+
+export const generate = async ({
+    config,
+    regenCommand = "npx dataverse-types-gen",
+    log = console.log
+}: RunOptions): Promise<void> => {
+    log(`Fetching $metadata from ${requireEnv("SERVER_URL")}`);
+    const token = await acquireToken();
+    const xml = await fetchMetadata(token);
+
+    const parser = new XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: "@_",
+        isArray: (name) =>
+            ["EntityType", "Property", "NavigationProperty", "EntitySet", "Schema"].includes(name)
+    });
+    const doc = parser.parse(xml);
+    const schemas: EdmSchema[] = arr(doc?.["edmx:Edmx"]?.["edmx:DataServices"]?.Schema);
+    const crmSchema = schemas.find((s) => s["@_Namespace"] === "Microsoft.Dynamics.CRM");
+    if (!crmSchema) {
+        throw new Error("Schema 'Microsoft.Dynamics.CRM' not found in $metadata");
+    }
+    const allEntities: EdmEntityType[] = arr(crmSchema.EntityType);
+    const namespace = crmSchema["@_Namespace"];
+    const alias = crmSchema["@_Alias"];
+    const nsPrefixes = [namespace, ...(alias ? [alias] : [])];
+
+    const byName = new Map<string, EdmEntityType>();
+    for (const e of allEntities) byName.set(e["@_Name"], e);
+
+    const requested = new Set(config.entities);
+    const missing = config.entities.filter((n) => !byName.has(n));
+    if (missing.length > 0) {
+        throw new Error(`Entities not found in $metadata: ${missing.join(", ")}`);
+    }
+
+    const stripNs = (full: string): string => {
+        for (const ns of nsPrefixes) {
+            const p = `${ns}.`;
+            if (full.startsWith(p)) return full.slice(p.length);
+        }
+        return full;
+    };
+
+    const flattenInherited = (e: EdmEntityType): EdmEntityType => {
+        if (!e["@_BaseType"]) return e;
+        const base = byName.get(stripNs(e["@_BaseType"]));
+        if (!base) return e;
+        const flatBase = flattenInherited(base);
+        return {
+            ...e,
+            Property: [...arr(flatBase.Property), ...arr(e.Property)],
+            NavigationProperty: [
+                ...arr(flatBase.NavigationProperty),
+                ...arr(e.NavigationProperty)
+            ]
+        };
+    };
+
+    log(`Fetching OptionSet metadata for ${config.entities.length} entities...`);
+    const picklistsByEntity = new Map<string, RawAttribute[]>();
+    await Promise.all(
+        config.entities.map(async (logicalName) => {
+            const attrs = await fetchPicklistsForEntity(token, logicalName);
+            picklistsByEntity.set(logicalName, attrs);
+        })
+    );
+
+    const optionSets = new Map<string, RawOptionSet>();
+    const attrEnumsByEntity = new Map<string, Map<string, string>>();
+    for (const [entityName, attrs] of picklistsByEntity) {
+        const m = new Map<string, string>();
+        for (const a of attrs) {
+            const tname = enumTypeName(a.OptionSet.Name);
+            const existing = optionSets.get(a.OptionSet.Name);
+            if (!existing) {
+                optionSets.set(a.OptionSet.Name, a.OptionSet);
+            }
+            m.set(a.LogicalName, tname);
+        }
+        attrEnumsByEntity.set(entityName, m);
+    }
+
+    const outDir = path.resolve(config.outputDir);
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const optionSetsCode = renderOptionSets(optionSets, regenCommand);
+    const optionSetsFile = path.join(outDir, "optionsets.ts");
+    fs.writeFileSync(optionSetsFile, optionSetsCode);
+    log(`Wrote ${path.relative(process.cwd(), optionSetsFile)}`);
+
+    const indexLines: string[] = [...HEADER(regenCommand)];
+
+    for (const logicalName of config.entities) {
+        const entity = flattenInherited(byName.get(logicalName)!);
+        const attrEnums = attrEnumsByEntity.get(logicalName) ?? new Map();
+        const { code } = renderEntity(entity, nsPrefixes, requested, attrEnums, regenCommand);
+        const file = path.join(outDir, `${logicalName}.ts`);
+        fs.writeFileSync(file, code);
+        log(`Wrote ${path.relative(process.cwd(), file)}`);
+        indexLines.push(`export type { ${tsTypeName(logicalName)} } from "./${logicalName}";`);
+    }
+
+    indexLines.push(`export * from "./optionsets";`);
+    const indexFile = path.join(outDir, "index.ts");
+    fs.writeFileSync(indexFile, indexLines.join("\n") + "\n");
+    log(`Wrote ${path.relative(process.cwd(), indexFile)}`);
+};
