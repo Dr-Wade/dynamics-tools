@@ -1,5 +1,11 @@
 # dataverse-msal-client
 
+## 0.2.0
+
+### Minor Changes
+
+- Add a typed query layer: `entity<T>(dynamics, collection)` returns a per-entity client with `retrieveMultiple` / `retrieveAll` / `create` / `update`, where `select` and the outer `expand[].property` are checked against `keyof T`. Pairs with `filter<T>()`, an immutable OData `$filter` builder whose field names are checked against `T`, string values are escaped, and `and`/`or` composition is parenthesised by construction.
+
 ## 0.1.0
 
 ### Minor Changes
